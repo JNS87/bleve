@@ -312,6 +312,8 @@ func (s *Scorch) introducePersist(persist *persistIntroduction) {
 	close(persist.applied)
 }
 
+// The introducer should definitely handle the segmentMerge.notify
+// channel before exiting the introduceMerge.
 func (s *Scorch) introduceMerge(nextMerge *segmentMerge) {
 	atomic.AddUint64(&s.stats.TotIntroduceMergeBeg, 1)
 	defer atomic.AddUint64(&s.stats.TotIntroduceMergeEnd, 1)
@@ -421,6 +423,8 @@ func (s *Scorch) introduceMerge(nextMerge *segmentMerge) {
 	atomic.StoreUint64(&s.stats.TotMemorySegmentsAtRoot, memSegments)
 	atomic.StoreUint64(&s.stats.TotFileSegmentsAtRoot, fileSegments)
 
+	newSnapshot.AddRef() // 1 ref for the nextMerge.notify response
+
 	newSnapshot.updateSize()
 	s.rootLock.Lock()
 	// swap in new index snapshot
@@ -436,17 +440,8 @@ func (s *Scorch) introduceMerge(nextMerge *segmentMerge) {
 		_ = rootPrev.DecRef()
 	}
 
-	// check for index closure before bumping the reference count,
-	// else this snapshot may leak if the requester has already
-	// exited the work loop.
-	select {
-	case <-s.closeCh:
-	default:
-		// 1 ref for the nextMerge.notify response
-		newSnapshot.AddRef()
-		// notify requester that we incorporated this
-		nextMerge.notify <- newSnapshot
-	}
+	// notify requester that we incorporated this
+	nextMerge.notify <- newSnapshot
 	close(nextMerge.notify)
 }
 
